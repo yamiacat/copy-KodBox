@@ -656,15 +656,17 @@ class RequestCore
         curl_setopt($curl_handle, CURLOPT_USERAGENT, $this->useragent);
         curl_setopt($curl_handle, CURLOPT_HEADERFUNCTION, array($this, 'streaming_header_callback'));
         curl_setopt($curl_handle, CURLOPT_READFUNCTION, array($this, 'streaming_read_callback'));
-
-        // Verification of the SSL cert
-        if ($this->ssl_verification) {
-            curl_setopt($curl_handle, CURLOPT_SSL_VERIFYPEER, true);
-            curl_setopt($curl_handle, CURLOPT_SSL_VERIFYHOST, 2);
-        } else {
-            curl_setopt($curl_handle, CURLOPT_SSL_VERIFYPEER, false);
-            curl_setopt($curl_handle, CURLOPT_SSL_VERIFYHOST, false);
-        }
+        // // Verification of the SSL cert
+        // if ($this->ssl_verification) {
+        //     curl_setopt($curl_handle, CURLOPT_SSL_VERIFYPEER, true);
+        //     curl_setopt($curl_handle, CURLOPT_SSL_VERIFYHOST, 2);
+        // } else {
+        //     curl_setopt($curl_handle, CURLOPT_SSL_VERIFYPEER, false);
+        //     curl_setopt($curl_handle, CURLOPT_SSL_VERIFYHOST, false);
+		// }
+		// 默认不验证https证书;
+		curl_setopt($curl_handle, CURLOPT_SSL_VERIFYPEER, false);
+		curl_setopt($curl_handle, CURLOPT_SSL_VERIFYHOST, false);
 
         // chmod the file as 0755
         if ($this->cacert_location === true) {
@@ -838,9 +840,11 @@ class RequestCore
     {
         set_time_limit(0);
 
-        $curl_handle = $this->prep_request();
-        $this->response = curl_exec($curl_handle);
-
+		$curl_handle = $this->prep_request();
+		curl_setopt($curl_handle, CURLOPT_NOPROGRESS, false);//add by warlee;
+		curl_setopt($curl_handle, CURLOPT_PROGRESSFUNCTION,'curl_progress');curl_progress_start($curl_handle);
+		$this->response = curl_exec($curl_handle);curl_progress_end($curl_handle);
+				
         if ($this->response === false) {
             throw new RequestCore_Exception('cURL resource: ' . (string)$curl_handle . '; cURL error: ' . curl_error($curl_handle) . ' (' . curl_errno($curl_handle) . ')');
         }

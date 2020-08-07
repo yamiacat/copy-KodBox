@@ -44,14 +44,14 @@ class explorerShare extends Controller{
 		if(!$path || !$info = IO::info($path)) return;
 		$pass = Model('SystemOption')->get('systemPassword');
 		$hash = Mcrypt::encode($info['path'],$pass);
-		return APP_HOST . "index.php?explorer/share/file&hash={$hash}&name=".$info['name'];
+		return APP_HOST . "index.php?explorer/share/file&hash={$hash}&name=".rawurlencode($info['name']);
 	}
 	public function linkOut($path,$token=false){
 		$parse  = KodIO::parse($path);
 		if($parse['type'] == KodIO::KOD_SHARE_LINK){
-			$url = APP_HOST . "index.php?explorer/share/fileOut&path={$path}";
+			$url = APP_HOST . "index.php?explorer/share/fileOut&path=".rawurlencode($path);
 		}else{
-			$url = APP_HOST . "index.php?explorer/index/fileOut&path={$path}";
+			$url = APP_HOST . "index.php?explorer/index/fileOut&path=".rawurlencode($path);
 		}
 		if($token) $url .= '&accessToken='.Action('user.index')->accessToken();
 		return $url;
@@ -65,7 +65,8 @@ class explorerShare extends Controller{
 			show_json(LNG('common.pathNotExists'),false);
 		}
 		$isDownload = isset($this->in['download']) && $this->in['download'] == 1;
-		IO::fileOut($path,$isDownload);
+		$downFilename = !empty($this->in['downFilename']) ? $this->in['downFilename'] : false;
+		IO::fileOut($path,$isDownload,$downFilename);
 	}
 	
 	/**
@@ -119,6 +120,10 @@ class explorerShare extends Controller{
 		if(!$share || $share['isLink'] != '1'){
 			show_json(LNG('explorer.share.notExist'),30100);
 		}
+		if($share['sourceInfo']['isDelete'] == '1'){
+			show_json(LNG('explorer.share.notExist'),30100);
+		}
+		
 		//检测是否过期
 		if($share['timeTo'] && $share['timeTo'] < time()){
 			show_json(LNG('explorer.share.expiredTips'),30101,$this->get(true));
@@ -129,7 +134,11 @@ class explorerShare extends Controller{
 			$share['options']['downloadNumber'] && 
 			$share['options']['downloadNumber'] <= $share['numDownload'] ){
 			$msg = LNG('explorer.share.downExceedTips');
-			is_ajax() ? show_json($msg,30102,$this->get(true)) : show_tips($msg);
+			$pathInfo = explode('/', $this->in['path']);
+			if(!empty($pathInfo[1]) || is_ajax()) {
+				show_json($msg,30102,$this->get(true));
+			}
+			show_tips($msg);
 		}
 		//检测是否需要登录
 		$user = Session::get("kodUser");
@@ -142,7 +151,9 @@ class explorerShare extends Controller{
 		$passKey  = 'Share_password_'.$share['shareID'];
 		if( $share['password'] ){
 			if( isset($this->in['password']) ){
-				$pass = trim($this->in['password']);
+				$code = md5(BASIC_PATH.Model('SystemOption')->get('systemPassword'));
+				$pass = Mcrypt::decode(trim($this->in['password']),md5($code));
+				
 				if($pass == $share['password']){
 					Session::set($passKey,$pass);
 				}else{

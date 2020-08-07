@@ -1085,16 +1085,18 @@ class S3 {
 	 * @param string $uri        Object URI
 	 * @param int    $lifetime   Lifetime in seconds
 	 * @param bool   $hostBucket Use the bucket name as the hostname
-	 * @param bool   $https      Use HTTPS ($hostBucket should be false for SSL verification)
+	 * @param bool   $https      Use HTTPS ($hostBucket should be false for SSL verification)	// x 根据当前访问获取
 	 *
 	 * @return string
 	 */
-	public function getAuthenticatedURL($bucket, $uri, $lifetime, $hostBucket = false, $https = false, $subResource = array()){
-		$expires = self::__getTime() + $lifetime;
+	// public function getAuthenticatedURL($bucket, $uri, $lifetime, $hostBucket = false, $https = false, $subResource = array()){
+	public function getAuthenticatedURL($bucket, $uri, $lifetime, $hostBucket = false, $subResource = array()){
+		// $expires = self::__getTime() + $lifetime;
+		$expires = strtotime(date('Ymd 23:59:59')); // kodbox：签名链接有效期，改为当天有效
 		$uri = str_replace(array('%2F', '%2B'), array('/', '+'), rawurlencode($uri));
 		$ext = http_build_query($subResource);
 		$url = sprintf(
-			($https ? 'https' : 'http') . '://%s/%sAWSAccessKeyId=%s&Expires=%u&Signature=%s', 
+			http_type() . '://%s/%sAWSAccessKeyId=%s&Expires=%u&Signature=%s', 
 			$hostBucket ? $bucket : self::$endpoint . '/' . $bucket, 
 			$uri . '?' . $ext . ($ext ? '&' : ''),
 			self::$__accessKey, 
@@ -1102,6 +1104,16 @@ class S3 {
 			urlencode(self::__getHash("GET\n\n\n{$expires}\n/{$bucket}/{$uri}".($ext ? '?' . urldecode($ext) : '')))
 		);
 		return $url;
+	}
+
+	/**
+	 * 获取请求Host
+	 * @param [type] $endpoint
+	 * @param [type] $bucket
+	 * @return void endpoint为域名时，host为bucket.endpoint，否则为endpoint
+	 */
+	public static function getObjectHost($endpoint, $bucket){
+		return is_domain($endpoint) ? $bucket . '.' . $endpoint : $endpoint;
 	}
 
 	/**
@@ -1123,7 +1135,7 @@ class S3 {
 			$signed_headers[strtolower($key)] = $value;
 		}
 		if (!array_key_exists('host', $signed_headers)) {
-			$signed_headers['host'] = $bucket . "." . self::$endpoint;
+			$signed_headers['host'] = self::getObjectHost(self::$endpoint, $bucket);
 		}
 		ksort($signed_headers);
 		$header_string = '';
@@ -1132,7 +1144,11 @@ class S3 {
 		}
 		$signed_headers_string = implode(';', array_keys($signed_headers));
 		$date_text = gmdate('Ymd');
-		$time_text = gmdate('Ymd\THis\Z');
+		// $time_text = gmdate('Ymd\THis\Z');
+
+		$time_text = gmdate('Ymd\T000000\Z');
+		$expires = 3600*24;	// kodbox：签名链接有效期，改为当天有效
+
 		$algorithm = 'AWS4-HMAC-SHA256';
 		$scope = "$date_text/$region/s3/aws4_request";
 		$x_amz_params = array(
@@ -1156,7 +1172,9 @@ class S3 {
 		$string_to_sign = "$algorithm\n$time_text\n$scope\n" . hash('sha256', $canonical_request, false);
 		$signing_key = hash_hmac('sha256', 'aws4_request', hash_hmac('sha256', 's3', hash_hmac('sha256', $region, hash_hmac('sha256', $date_text, 'AWS4' . $secret_key, true), true), true), true);
 		$signature = hash_hmac('sha256', $string_to_sign, $signing_key);
-		$url = 'https://' . $signed_headers['host'] . $encoded_uri . '?' . $query_string . '&X-Amz-Signature=' . $signature;
+
+		$host = is_domain(self::$endpoint) ?  $signed_headers['host'] : self::$endpoint . '/' . $bucket;
+		$url = http_type() . '://' . $host . $encoded_uri . '?' . $query_string . '&X-Amz-Signature=' . $signature;
 
 		return $url;
 	}
@@ -1575,7 +1593,7 @@ final class S3Request {
 
 		if ($this->bucket !== '') {
 			if ($this->__dnsBucketName($this->bucket)) {
-				$this->headers['Host'] = $this->bucket . '.' . $this->endpoint;
+				$this->headers['Host'] = S3::getObjectHost($this->endpoint, $this->bucket);
 				$this->resource = '/' . $this->bucket . $this->uri;
 			} else {
 				$this->headers['Host'] = $this->endpoint;
@@ -1668,12 +1686,18 @@ final class S3Request {
 				$this->resource .= $query;
 			}
 		}
-		$url = 'http://' . ($this->headers['Host'] !== '' ? $this->headers['Host'] : $this->endpoint) . $this->uri;
+		$host = $this->headers['Host'] !== '' ? $this->headers['Host'] : $this->endpoint;
+
+		if(!is_domain($this->endpoint)) $host = $this->endpoint . '/' . $this->bucket;
+		$url = http_type() . '://' . $host . $this->uri;
 
 		// Basic setup
 		$curl = curl_init();
 		curl_setopt($curl, CURLOPT_USERAGENT, 'S3/php');
 		curl_setopt($curl, CURLOPT_URL, $url);
+		curl_setopt($curl, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+		curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, 0);
+		curl_setopt($curl, CURLOPT_SSL_VERIFYHOST, 0);
 
 		if (S3::$proxy != null && isset(S3::$proxy['host'])) {
 			curl_setopt($curl, CURLOPT_PROXY, S3::$proxy['host']);
@@ -1771,7 +1795,9 @@ final class S3Request {
 				break;
 			default: break;
 		}
-
+		curl_setopt($curl, CURLOPT_NOPROGRESS, false);//add by warlee;
+		curl_setopt($curl, CURLOPT_PROGRESSFUNCTION,'curl_progress');curl_progress_start($curl);
+		
 		// set curl progress function callback
 		if (S3::$progressFunction) {
 			curl_setopt($curl, CURLOPT_NOPROGRESS, false);
@@ -1788,7 +1814,7 @@ final class S3Request {
 				'resource'	 => $this->resource,
 			);
 		}
-
+		curl_progress_end($curl);
 		@curl_close($curl);
 
 		// Parse body into XML
